@@ -4,14 +4,21 @@ from celery import Celery
 from celery.utils.log import get_task_logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
-from sqlalchemy.orm import selectinload
 import asyncio
 import os
+import io
+import tempfile
 from datetime import datetime
+import uuid
+from pathlib import Path
 
 from app.config import settings
 from app.db import async_session
 from app.models import Job, JobStatus
+from app.storage import storage
+from app.vectorizer import vectorizer
+from app.animator import animator
+from app.renderer import renderer
 
 # Create celery app
 celery_app = Celery(
@@ -81,19 +88,56 @@ async def _process_job(job_id: int) -> dict:
         await session.commit()
 
         try:
-            # TODO: Implement the actual processing pipeline
-            # 1. Vectorize the image
-            # 2. Create animated SVG
-            # 3. Render MP4 with hand animation
+            # Download the input file from storage
+            logger.info(f"Downloading input file: {job.input_path}")
+            input_file, content_type = storage.download_file(job.input_path)
+            input_data = input_file.read()
             
-            # For now, just log the process steps
-            logger.info(f"Job {job_id}: would vectorize image at {job.input_path}")
-            logger.info(f"Job {job_id}: would create animated SVG")
-            logger.info(f"Job {job_id}: would render MP4 with hand animation")
+            # 1. Vectorize the image
+            logger.info("Step 1: Vectorizing image")
+            svg_content = vectorizer.process_image(input_data)
+            
+            # Save intermediate SVG result
+            svg_path = f"processing/{job_id}/vectorized.svg"
+            with tempfile.NamedTemporaryFile(suffix=".svg", delete=False) as temp_svg:
+                temp_svg.write(svg_content.encode('utf-8'))
+                temp_svg.flush()
+                
+                with open(temp_svg.name, 'rb') as svg_file:
+                    storage.upload_file(svg_file, svg_path, "image/svg+xml")
+            
+            # 2. Create animated SVG
+            logger.info("Step 2: Creating animated SVG")
+            animated_svg = animator.create_animated_svg(svg_content)
+            
+            # Save animated SVG result
+            animated_svg_path = f"processing/{job_id}/animated.svg"
+            with tempfile.NamedTemporaryFile(suffix=".svg", delete=False) as temp_animated:
+                temp_animated.write(animated_svg.encode('utf-8'))
+                temp_animated.flush()
+                
+                with open(temp_animated.name, 'rb') as animated_file:
+                    storage.upload_file(animated_file, animated_svg_path, "image/svg+xml")
+            
+            # 3. Render MP4 with hand animation
+            logger.info("Step 3: Rendering MP4 with hand animation")
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_output:
+                output_path = temp_output.name
+            
+            # Render video
+            renderer.render(animated_svg, output_path)
+            
+            # Upload the rendered video to storage
+            final_path = f"output/{job_id}/output.mp4"
+            with open(output_path, 'rb') as video_file:
+                storage.upload_file(video_file, final_path, "video/mp4")
+            
+            # Clean up temporary files
+            os.unlink(output_path)
             
             # Update job status and output path
             job.status = JobStatus.COMPLETED
-            job.output_path = f"output/{job_id}/output.mp4"  # This will be set by the renderer
+            job.output_path = final_path
             job.updated_at = datetime.utcnow()
             await session.commit()
             
