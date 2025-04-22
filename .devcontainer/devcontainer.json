@@ -12,8 +12,8 @@
       "version": "18"
     }
   },
-  "postCreateCommand": "curl -sSL https://install.python-poetry.org | python3 - && export PATH=\"/home/vscode/.local/bin:$PATH\" && echo 'export PATH=\"/home/vscode/.local/bin:$PATH\"' >> ~/.bashrc && apt-get update && apt-get install -y ffmpeg && npm install -g pnpm && pip install mc",
-  "postStartCommand": "docker compose up -d",
+  "postCreateCommand": "curl -sSL https://install.python-poetry.org | python3 - && export PATH=\"/home/vscode/.local/bin:$PATH\" && echo 'export PATH=\"/home/vscode/.local/bin:$PATH\"' >> ~/.bashrc && apt-get update && apt-get install -y ffmpeg && npm install -g pnpm && pip install mc && chmod +x /workspaces/sketch-to-animated-drawing/scripts/setup.sh && chmod +x /workspaces/sketch-to-animated-drawing/.devcontainer/startup.sh",
+  "postStartCommand": "bash /workspaces/sketch-to-animated-drawing/.devcontainer/startup.sh",
   "customizations": {
     "vscode": {
       "extensions": [
@@ -30,6 +30,13 @@
         "editor.formatOnSave": true,
         "editor.codeActionsOnSave": {
           "source.fixAll": true
+        },
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "terminal.integrated.profiles.linux": {
+          "bash": {
+            "path": "bash",
+            "icon": "terminal-bash"
+          }
         }
       }
     }
