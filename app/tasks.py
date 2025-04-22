@@ -11,6 +11,7 @@ import tempfile
 from datetime import datetime
 import uuid
 from pathlib import Path
+import logging
 
 from app.config import settings
 from app.db import async_session
@@ -20,26 +21,48 @@ from app.vectorizer import vectorizer
 from app.animator import animator
 from app.renderer import renderer
 
-# Create celery app
-celery_app = Celery(
-    "worker",
-    broker=f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0",
-    backend=f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0",
-)
-
-# Configure Celery
-celery_app.conf.task_routes = {
-    "app.tasks.process_sketch": "main-queue",
-}
-celery_app.conf.update(
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-    timezone="UTC",
-    enable_utc=True,
-)
-
 logger = get_task_logger(__name__)
+
+# Check if Redis is available
+try:
+    # Create celery app with Redis
+    celery_app = Celery(
+        "worker",
+        broker=f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0",
+        backend=f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/0",
+    )
+    
+    # Configure Celery
+    celery_app.conf.task_routes = {
+        "app.tasks.process_sketch": "main-queue",
+    }
+    celery_app.conf.update(
+        task_serializer="json",
+        accept_content=["json"],
+        result_serializer="json",
+        timezone="UTC",
+        enable_utc=True,
+    )
+    
+    redis_available = True
+    logger.info("Redis connection successful - using Redis for Celery")
+    
+except Exception as e:
+    # Create celery app with local memory
+    logger.warning(f"Redis connection failed: {e}")
+    logger.warning("Using memory broker for development - tasks will run in-process")
+    
+    celery_app = Celery(
+        "worker",
+        broker='memory://',
+        backend='memory://',
+    )
+    
+    # Configure Celery for local development
+    celery_app.conf.task_always_eager = True
+    celery_app.conf.task_eager_propagates = True
+    
+    redis_available = False
 
 
 @celery_app.task(name="app.tasks.process_sketch")
