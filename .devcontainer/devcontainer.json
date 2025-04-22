@@ -12,7 +12,7 @@
       "version": "18"
     }
   },
-  "postCreateCommand": "apt-get update && apt-get install -y ffmpeg && curl -sSL https://install.python-poetry.org | python3 - && npm install -g pnpm",
+  "postCreateCommand": "curl -sSL https://install.python-poetry.org | python3 - && export PATH=\"/home/vscode/.local/bin:$PATH\" && echo 'export PATH=\"/home/vscode/.local/bin:$PATH\"' >> ~/.bashrc && apt-get update && apt-get install -y ffmpeg && npm install -g pnpm && pip install mc",
   "postStartCommand": "docker compose up -d",
   "customizations": {
     "vscode": {
@@ -34,7 +34,7 @@
       }
     }
   },
-  "forwardPorts": [8000, 5173, 9000],
+  "forwardPorts": [8000, 5173, 9000, 9001, 6379],
   "waitFor": "postCreateCommand",
   "remoteUser": "vscode"
 }
