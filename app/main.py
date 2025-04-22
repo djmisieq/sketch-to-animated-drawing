@@ -1,6 +1,7 @@
 """Main FastAPI application."""
 
 import uuid
+import logging
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -15,8 +16,11 @@ from app.config import settings
 from app.db import get_db, init_db
 from app.models import Job, JobStatus, JobCreate, JobResponse, JobsListResponse
 from app.storage import storage
-from app.tasks import celery_app
+from app.tasks import celery_app, redis_available
 
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -36,7 +40,19 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_event():
     """Initialize DB on startup."""
-    await init_db()
+    logger.info("Initializing application...")
+    
+    # Create database tables
+    try:
+        await init_db()
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+    
+    # Log service status
+    if not redis_available:
+        logger.warning("Running in LOCAL DEVELOPMENT MODE (no Redis, no Docker)")
+        logger.warning("Tasks will run synchronously, files stored in memory only")
 
 
 @app.get("/health")
@@ -46,7 +62,17 @@ async def health_check() -> Dict[str, str]:
     Returns:
         Dict[str, str]: Status
     """
-    return {"status": "ok"}
+    services_status = {
+        "app": "ok",
+        "redis": "ok" if redis_available else "not_available (using in-memory fallback)",
+        "storage": "ok" if storage.__class__.__name__ == "MinioStorage" else "not_available (using in-memory fallback)",
+    }
+    
+    return {
+        "status": "ok", 
+        "services": services_status,
+        "mode": "production" if redis_available else "development"
+    }
 
 
 @app.post(f"{settings.API_V1_STR}/jobs", response_model=JobResponse)
@@ -90,8 +116,13 @@ async def create_job(
     unique_id = str(uuid.uuid4())
     storage_path = f"uploads/{unique_id}{file_ext}"
     
-    # Upload file to Minio
-    storage.upload_file(file.file, storage_path, file.content_type)
+    # Upload file to storage
+    try:
+        storage.upload_file(file.file, storage_path, file.content_type)
+        logger.info(f"File uploaded to storage: {storage_path}")
+    except Exception as e:
+        logger.error(f"File upload failed: {e}")
+        raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
     
     # Create job in database
     job = Job(
@@ -102,9 +133,16 @@ async def create_job(
     db.add(job)
     await db.commit()
     await db.refresh(job)
+    logger.info(f"Created job with ID: {job.id}")
     
     # Start processing task
-    celery_app.send_task("app.tasks.process_sketch", args=[job.id])
+    try:
+        celery_app.send_task("app.tasks.process_sketch", args=[job.id])
+        logger.info(f"Task scheduled for job ID: {job.id}")
+    except Exception as e:
+        logger.error(f"Failed to schedule task: {e}")
+        # No need to fail the request if task scheduling fails
+        # The user can still check status and retry later
     
     return JobResponse.model_validate(job)
 
@@ -184,9 +222,12 @@ async def get_result(job_id: int, db: AsyncSession = Depends(get_db)) -> Dict[st
         raise HTTPException(status_code=400, detail="Job has no output file")
     
     # Generate presigned URL
-    url = storage.get_file_url(job.output_path)
-    
-    return {"url": url, "expires_in_seconds": 86400}  # 24 hours
+    try:
+        url = storage.get_file_url(job.output_path)
+        return {"url": url, "expires_in_seconds": 86400}  # 24 hours
+    except Exception as e:
+        logger.error(f"Failed to get file URL: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get file URL: {str(e)}")
 
 
 if __name__ == "__main__":
